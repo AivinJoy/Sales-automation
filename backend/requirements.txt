@@ -3,5 +3,5 @@ uvicorn
 pandas
 openpyxl
 pydantic
-supabase  <-- ADD THIS LINE
+supabase  
 python-multipart
