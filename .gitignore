@@ -1,0 +1,21 @@
+# Ignore Python junk
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# Ignore Node junk
+node_modules/
+.svelte-kit/
+build/
+.DS_Store
+
+# Ignore Local Output (since we use Cloud now)
+backend/outputs/
+local_backups/
+
+# --- SECURITY: Ignore Migration & Backup Scripts ---
+# These contain hardcoded API Keys. DO NOT COMMIT.
+migrate_to_cloud.py
+migrate_missed_files.py
+backup_from_cloud.py
