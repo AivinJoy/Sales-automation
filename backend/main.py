@@ -17,13 +17,11 @@ from models import SimulationRequest, DailyAction, ReportRequest, StockEntry
 app = FastAPI()
 
 # --- CORS MIDDLEWARE ---
+# --- CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://sales-automation-beige.vercel.app", # Your live Vercel frontend
-        "http://localhost:5173"                      # Keep this so it still works when testing locally
-    ], 
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False, # MUST BE FALSE WHEN ORIGINS IS "*"
     allow_methods=["*"], 
     allow_headers=["*"], 
 )
