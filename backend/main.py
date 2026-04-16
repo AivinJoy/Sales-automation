@@ -19,7 +19,10 @@ app = FastAPI()
 # --- CORS MIDDLEWARE ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=[
+        "https://sales-automation-beige.vercel.app", # Your live Vercel frontend
+        "http://localhost:5173"                      # Keep this so it still works when testing locally
+    ], 
     allow_credentials=True,
     allow_methods=["*"], 
     allow_headers=["*"], 
