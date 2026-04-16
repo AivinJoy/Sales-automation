@@ -14,10 +14,15 @@ def auto_adjust_columns(writer, sheet_name, df):
     worksheet = writer.sheets[sheet_name]
     for idx, col in enumerate(df.columns):
         series = df[col]
-        max_len = max(
-            series.astype(str).map(len).max(),
-            len(str(col))
-        ) + 2
+        
+        # Safely calculate the max length of data in the column
+        if len(series) > 0:
+            # Lambda safely converts every item to a string before checking length
+            max_data_len = series.map(lambda x: len(str(x))).max()
+        else:
+            max_data_len = 0
+            
+        max_len = max(max_data_len, len(str(col))) + 2
         col_letter = get_column_letter(idx + 1)
         worksheet.column_dimensions[col_letter].width = max_len
 
