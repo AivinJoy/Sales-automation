@@ -1,3 +1,5 @@
+<!-- sales-ui\src\routes\+page.svelte -->
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import { API_URL } from '$lib/config';

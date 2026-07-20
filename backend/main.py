@@ -1,3 +1,5 @@
+# backend\main.py
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +41,7 @@ def simulate_month(req: SimulationRequest):
     # --- DUAL INVENTORY SETUP ---
     current_stock_box = req.opening_stock_box
     current_stock_liquid = req.opening_stock_liquid
+    current_stock_custom = req.custom_opening_stock
     
     current_inv = req.starting_invoice - 1 
     all_sales = []
@@ -50,6 +53,7 @@ def simulate_month(req: SimulationRequest):
     
     total_bought_box = 0
     total_bought_liquid = 0
+    total_bought_custom = 0
 
     for entry in req.stock_inflows:
         if entry.date not in inflows_map:
@@ -59,6 +63,7 @@ def simulate_month(req: SimulationRequest):
         # Track totals
         total_bought_box += entry.qty_box
         total_bought_liquid += entry.qty_liquid
+        total_bought_custom += entry.qty_custom
         
         # Log Box Purchase
         if entry.qty_box > 0:
@@ -78,6 +83,14 @@ def simulate_month(req: SimulationRequest):
                 "Quantity Received": entry.qty_liquid
             })
 
+        if entry.qty_custom > 0 and req.custom_product_name:
+            purchase_log_data.append({
+                "Date": entry.date,
+                "Item": req.custom_product_name,
+                "Purchase Invoice No": entry.invoice_no,
+                "Quantity Received": entry.qty_custom
+            })    
+
     # Prepare Look-Ahead Lists
     inflow_dates_box = sorted([
         datetime.strptime(d, "%d/%m/%Y") 
@@ -89,6 +102,12 @@ def simulate_month(req: SimulationRequest):
         datetime.strptime(d, "%d/%m/%Y") 
         for d, entries in inflows_map.items() 
         if any(e.qty_liquid > 0 for e in entries)
+    ])
+
+    inflow_dates_custom = sorted([
+        datetime.strptime(d, "%d/%m/%Y")
+        for d, entries in inflows_map.items()
+        if any(e.qty_custom > 0 for e in entries)
     ])
     
     # Trackers
@@ -102,9 +121,10 @@ def simulate_month(req: SimulationRequest):
         
         # --- A. HANDLE STOCK INFLOW ---
         if date_str in inflows_map:
+            custom_bal_str = f", {req.custom_product_name[:3]}={current_stock_custom}" if req.custom_product_name else ""
             audit_log.append({
                 "Date": date_str, "Type": "Cycle Summary", 
-                "Info": f"Clos Bal: Box={current_stock_box}, Liq={current_stock_liquid}",
+                "Info": f"Clos Bal: Box={current_stock_box}, Liq={current_stock_liquid}{custom_bal_str}",
                 "Customer": "-", "Quantity": "-", "Amount": "-", 
                 "INVOICE": "-", "GSTIN": "-", "TAXABLE": "-", "CGST": "-", "SGST": "-"
             })
@@ -122,6 +142,12 @@ def simulate_month(req: SimulationRequest):
                         "Date": date_str, "Type": "Stock Added (Liq)", "Info": f"Inv: {inflow.invoice_no}", 
                         "Customer": "-", "Quantity": f"+{inflow.qty_liquid}", "Amount": "-"
                     })
+
+                if inflow.qty_custom > 0 and req.custom_product_name:
+                    current_stock_custom += inflow.qty_custom
+                    audit_log.append({
+                        "Date": date_str, "Type": f"Stock Added ({req.custom_product_name})", "Info": f"Inv: {inflow.invoice_no}", 
+                        "Customer": "-", "Quantity": f"+{inflow.qty_custom}", "Amount": "-"})    
             
             start_delay = random.choice([0, 1, 2])
             if start_delay == 0:
@@ -158,6 +184,12 @@ def simulate_month(req: SimulationRequest):
         days_until_liq = (next_liq_refill - curr).days
         if days_until_liq < 1: days_until_liq = 1
 
+        next_custom_refill = end_date
+        for d_obj in inflow_dates_custom:
+            if d_obj > curr: next_custom_refill = d_obj; break
+        days_until_custom = (next_custom_refill - curr).days
+        if days_until_custom < 1: days_until_custom = 1
+
         # --- D. RUN SALES LOGIC (DUAL PASS WITH USER RATES) ---
         
         # PASS 1: SOORE BOX
@@ -181,16 +213,27 @@ def simulate_month(req: SimulationRequest):
 
         # Inject Product Name
         for s in sales_liquid: s["Item Name"] = "Soore Liquid"
+
+        # PASS 3: CUSTOM PRODUCT (NEW)
+        sales_custom = []
+        status_custom = "Active"
+        if req.custom_product_name:
+            current_stock_custom, sales_custom, current_inv, status_custom = logic.decide_sales_for_day(
+                curr, current_stock_custom, customers, current_inv, 
+                days_until_next_refill=days_until_custom, rate_override=req.custom_product_rate, force_low_mode=force_low_sales, product_name=req.custom_product_name
+            )
+            for s in sales_custom: s["Item Name"] = req.custom_product_name
         
         if force_low_sales: force_low_sales = False
 
         # --- E. LOGGING ---
-        daily_sales = sales_box + sales_liquid
+        daily_sales = sales_box + sales_liquid + sales_custom
         
         if not daily_sales:
             info_msg = "-"
             if status_box != "Active": info_msg = status_box
             elif status_liq != "Active": info_msg = status_liq
+            elif status_custom != "Active" and req.custom_product_name: info_msg = status_custom
             
             audit_log.append({
                 "Date": date_str, "Type": "No Sales", "Info": info_msg,
@@ -220,28 +263,39 @@ def simulate_month(req: SimulationRequest):
     # Save Purchase Log Summary
     purchase_log_data.append({"Date": "TOTAL", "Item": "Soore Box", "Quantity Received": total_bought_box})
     purchase_log_data.append({"Date": "TOTAL", "Item": "Soore Liquid", "Quantity Received": total_bought_liquid})
-    
+    if req.custom_product_name: # NEW
+        purchase_log_data.append({"Date": "TOTAL", "Item": req.custom_product_name, "Quantity Received": total_bought_custom})
+
+
     reports.save_purchase_log(purchase_log_data, month_name, req.year)
 
     total_revenue = sum(s["TAXABLE"] for s in all_sales)
 
-    # 5. Update Live State in Cloud
-    new_state = storage.load_state()
-    if "stock_map" not in new_state: new_state["stock_map"] = {}
+    # 5. Save Monthly Snapshot to Cloud (monthly_snapshots table)
+    snapshot = {
+        "month": req.month,
+        "year": req.year,
+        "box_stock": current_stock_box,
+        "liquid_stock": current_stock_liquid,
+        "custom_stock": current_stock_custom if req.custom_product_name else 0,
+        "last_invoice": current_inv,
+        "total_revenue": total_revenue,
+        "snapshot_date": datetime.now().isoformat()
+    }
     
-    new_state["stock_map"]["Soore Box"] = current_stock_box
-    new_state["stock_map"]["Soore Liquid"] = current_stock_liquid
-    
-    new_state["last_invoice"] = current_inv
-    new_state["total_sales_val"] = total_revenue 
-    
-    storage.save_state(new_state)
+    # Save the new snapshot row to your Supabase table
+    storage.save_snapshot(snapshot)
+
+    # NEW Output String formatting
+    final_stock_str = f"Box: {current_stock_box}, Liq: {current_stock_liquid}"
+    if req.custom_product_name:
+        final_stock_str += f", {req.custom_product_name[:3]}: {current_stock_custom}"
     
     return {
         "message": "Simulation Complete", 
         "file": filename, 
         "total_sales": total_revenue,
-        "final_stock": f"Box: {current_stock_box}, Liq: {current_stock_liquid}"
+        "final_stock": final_stock_str
     }
 
 @app.get("/state")

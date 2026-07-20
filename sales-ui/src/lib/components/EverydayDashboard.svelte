@@ -1,3 +1,5 @@
+<!--sales-ui\src\lib\components\EverydayDashboard.svelte -->
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import { API_URL } from '$lib/config';

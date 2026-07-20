@@ -1,3 +1,5 @@
+# backend\storage.py
+
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
 
@@ -47,6 +49,7 @@ def save_state(state):
         payload = {
             "stock_box": stock_map.get("Soore Box", 0),
             "stock_liquid": stock_map.get("Soore Liquid", 0),
+            "stock_custom": stock_map.get("Soore Powder", 0),
             "last_invoice": state.get("last_invoice"),
             "total_revenue": state.get("total_sales_val")
         }
@@ -76,3 +79,14 @@ def get_customers():
     except Exception as e:
         print(f"❌ DB Error fetching customers: {e}")
         return []
+
+def save_snapshot(snapshot_data):
+    """
+    Inserts a new monthly snapshot row into the 'monthly_snapshots' table.
+    """
+    try:
+        # This inserts the new record without affecting your 'app_state' table
+        supabase.table("monthly_snapshots").insert(snapshot_data).execute()
+        print("✅ Snapshot saved to history.")
+    except Exception as e:
+        print(f"❌ DB Error saving snapshot: {e}")    

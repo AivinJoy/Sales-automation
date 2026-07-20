@@ -1,3 +1,5 @@
+<!-- sales-ui\src\lib\components\HistoryBackfill.svelte -->
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import { API_URL } from '$lib/config';
@@ -7,7 +9,8 @@
         date: string; 
         invoice_no: string; 
         qty_box: number; 
-        qty_liquid: number; 
+        qty_liquid: number;
+        qty_custom: number; 
     }
     
     interface SimulationResult { 
@@ -24,6 +27,11 @@
     // Dual Opening Stock
     let openingStockBox: number = 0;
     let openingStockLiquid: number = 0;
+
+    // NEW CUSTOM PRODUCT STATE
+    let customProductName: string = "";
+    let customOpeningStock: number = 0;
+    let customProductRate: number = 0;
     
     let startingInvoice: number = 4520;
 
@@ -36,7 +44,8 @@
         date: "05/06/2025", 
         invoice_no: "INV-001", 
         qty_box: 0, 
-        qty_liquid: 0 
+        qty_liquid: 0,
+        qty_custom: 0 
     }];
     
     let simResult: SimulationResult | null = null;
@@ -60,8 +69,8 @@
 
     onMount(() => { fetchLastState(); });
 
-    function addInflowRow() {
-        stockInflows = [...stockInflows, { date: "", invoice_no: "", qty_box: 0, qty_liquid: 0 }];
+    function addInflowRow() { // Update this function around line 50!
+        stockInflows = [...stockInflows, { date: "", invoice_no: "", qty_box: 0, qty_liquid: 0, qty_custom: 0 }];
     }
 
     function removeInflowRow(index: number) {
@@ -80,6 +89,10 @@
                 // --- SEND USER-DEFINED RATES ---
                 rate_box: rateBox,
                 rate_liquid: rateLiquid,
+                // --- SEND CUSTOM PRODUCT ---
+                custom_product_name: customProductName,
+                custom_product_rate: customProductRate,
+                custom_opening_stock: customOpeningStock,
                 stock_inflows: stockInflows
             };
             
@@ -148,6 +161,28 @@
         <p class="col-span-2 text-xs text-blue-500 italic">You can edit these rates for this simulation.</p>
     </div>
 
+    <!-- NEW SECTION: CUSTOM PRODUCT DETAILS -->
+    <div class="grid grid-cols-3 gap-6 mb-6 bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+        <div>
+            <label class="block text-sm font-semibold mb-1 text-yellow-800">
+                Custom Product Name
+                <input type="text" bind:value={customProductName} placeholder="e.g. Soore Powder" class="mt-1 w-full p-2 border border-yellow-300 rounded bg-white text-yellow-900 focus:ring-2 focus:ring-yellow-400 outline-none">
+            </label>
+        </div>
+        <div>
+            <label class="block text-sm font-semibold mb-1 text-yellow-800">
+                Custom Rate (₹)
+                <input type="number" bind:value={customProductRate} class="mt-1 w-full p-2 border border-yellow-300 rounded bg-white font-bold text-yellow-900 focus:ring-2 focus:ring-yellow-400 outline-none">
+            </label>
+        </div>
+        <div>
+            <label class="block text-sm font-semibold mb-1 text-yellow-800">
+                Custom Opening Stock
+                <input type="number" bind:value={customOpeningStock} class="mt-1 w-full p-2 border border-yellow-300 rounded bg-white font-bold text-yellow-900 focus:ring-2 focus:ring-yellow-400 outline-none">
+            </label>
+        </div>
+    </div>
+
     <div class="grid grid-cols-3 gap-6 mb-6">
         <div>
             <label class="block text-sm font-semibold mb-1 text-gray-700">
@@ -172,59 +207,37 @@
 
     <p class="block text-sm font-semibold mb-2">Stock Inflows (Purchases)</p>
     <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
+        <!-- FIXED HEADER SPANS -->
         <div class="grid grid-cols-12 gap-2 mb-2 text-xs font-bold text-gray-500 uppercase text-center">
-            <div class="col-span-3 text-left">Date</div>
-            <div class="col-span-3 text-left">Inv No</div>
+            <div class="col-span-2 text-left">Date</div>
+            <div class="col-span-2 text-left">Inv No</div>
             <div class="col-span-2">Qty Box</div>
             <div class="col-span-2">Qty Liq</div>
+            <div class="col-span-2">Qty Custom</div>
             <div class="col-span-2"></div>
         </div>
         
         {#each stockInflows as inflow, i}
+            <!-- FIXED INPUT SPANS & ADDED CUSTOM INPUT -->
             <div class="grid grid-cols-12 gap-2 mb-2 items-center">
-                <div class="col-span-3">
-                    <input 
-                        type="text" 
-                        aria-label="Purchase Date" 
-                        bind:value={inflow.date} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none" 
-                        placeholder="DD/MM/YYYY"
-                    >
-                </div>
-                <div class="col-span-3">
-                    <input 
-                        type="text" 
-                        aria-label="Invoice Number" 
-                        bind:value={inflow.invoice_no} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-mono text-sm" 
-                        placeholder="BILL-123"
-                    >
+                <div class="col-span-2">
+                    <input type="text" aria-label="Purchase Date" bind:value={inflow.date} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none" placeholder="DD/MM/YYYY">
                 </div>
                 <div class="col-span-2">
-                    <input 
-                        type="number" 
-                        aria-label="Qty Box" 
-                        bind:value={inflow.qty_box} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" 
-                        placeholder="0"
-                    >
+                    <input type="text" aria-label="Invoice Number" bind:value={inflow.invoice_no} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-mono text-sm" placeholder="BILL-123">
                 </div>
                 <div class="col-span-2">
-                    <input 
-                        type="number" 
-                        aria-label="Qty Liquid" 
-                        bind:value={inflow.qty_liquid} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" 
-                        placeholder="0"
-                    >
+                    <input type="number" aria-label="Qty Box" bind:value={inflow.qty_box} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" placeholder="0">
+                </div>
+                <div class="col-span-2">
+                    <input type="number" aria-label="Qty Liquid" bind:value={inflow.qty_liquid} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" placeholder="0">
+                </div>
+                <div class="col-span-2">
+                    <!-- NEW CUSTOM QUANTITY INPUT -->
+                    <input type="number" aria-label="Qty Custom" bind:value={inflow.qty_custom} class="w-full p-2 border rounded focus:ring-1 focus:ring-yellow-400 outline-none font-bold text-yellow-700 bg-yellow-50 text-center" placeholder="0">
                 </div>
                 <div class="col-span-2 text-center">
-                    <button 
-                        on:click={() => removeInflowRow(i)} 
-                        class="text-red-500 hover:text-red-700 font-bold px-2 cursor-pointer" 
-                        title="Remove Entry"
-                        aria-label="Remove Row"
-                    >✕</button>
+                    <button on:click={() => removeInflowRow(i)} class="text-red-500 hover:text-red-700 font-bold px-2 cursor-pointer" title="Remove Entry" aria-label="Remove Row">✕</button>
                 </div>
             </div>
         {/each}

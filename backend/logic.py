@@ -1,3 +1,5 @@
+#backend\logic.py
+
 import random
 from config import SETTINGS, HOLIDAYS
 
@@ -5,7 +7,7 @@ def is_holiday(date_str, date_obj):
     # Check if Sunday OR if date is in the specific Holiday List
     return date_obj.weekday() == 6 or date_str in HOLIDAYS
 
-def decide_sales_for_day(date_obj, current_stock, customers, last_invoice, days_until_next_refill, rate_override=None, force_low_mode=False):
+def decide_sales_for_day(date_obj, current_stock, customers, last_invoice, days_until_next_refill, rate_override=None, force_low_mode=False, product_name="Unknown Product"):
     """
     Decides sales based on PACING logic with a RANDOMIZED target buffer.
     """
@@ -84,7 +86,8 @@ def decide_sales_for_day(date_obj, current_stock, customers, last_invoice, days_
         taxable = qty * final_rate
         
         sale = {
-            "_customer_name": cust.get("name", "Unknown"), 
+            "_customer_name": cust.get("name", "Unknown"),
+            "_product_name": product_name, 
             "GSTIN": cust.get("gstin", ""),
             "INVOICE": f"{SETTINGS['invoice_prefix']}{inv_counter}",
             "DATE": date_str,

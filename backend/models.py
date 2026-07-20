@@ -1,3 +1,5 @@
+# backend\models.py
+
 from pydantic import BaseModel
 from typing import List
 
@@ -6,6 +8,7 @@ class StockEntry(BaseModel):
     invoice_no: str
     qty_box: int       # <--- Quantity for Soore Box
     qty_liquid: int    # <--- Quantity for Soore Liquid
+    qty_custom: int = 0 # <--- NEW: Quantity for Custom Product
 
 class SimulationRequest(BaseModel):
     month: int
@@ -17,6 +20,12 @@ class SimulationRequest(BaseModel):
     # NEW: Editable Rates
     rate_box: float
     rate_liquid: float
+
+    # --- NEW: Custom Product Details ---
+    custom_product_name: str = ""
+    custom_product_rate: float = 0.0
+    custom_opening_stock: int = 0
+    # -----------------------------------
 
     starting_invoice: int
     

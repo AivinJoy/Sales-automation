@@ -1,4 +1,12 @@
+# backend\config.py
+
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 1. Locate and load the .env file dynamically
+env_path = Path(__file__).resolve().parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # --- FILE PATHS (Keep these for temporary operations) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -11,9 +19,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- SUPABASE CREDENTIALS ---
 # These are the keys required to talk to your Cloud Database
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://hqcobawwspzovimjzngs.supabase.co")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
 # Note: In production, keep this key secret. For now, it matches your migration script.
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhxY29iYXd3c3B6b3ZpbWp6bmdzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTQyMTExMiwiZXhwIjoyMDg0OTk3MTEyfQ.hjpfyQl8h3ziMSzYdZSPo0zFv5mmkPvVwlk3A1p8oY4")
+SUPABASE_KEY = os.getenv("SUPABASE_API")
 
 # --- BUSINESS RULES ---
 SETTINGS = {
