@@ -10,10 +10,9 @@
     let mode: 'dashboard' | 'simulation' = 'dashboard';
     let sidebarTab: 'sales' | 'purchases' = 'sales'; 
     
-    // Inventory State
-    let boxStock = 0;
-    let liquidStock = 0;
-    
+    // Inventory State — dynamic map of { productName: stockQty } instead of two fixed vars
+    let stockMap: Record<string, number> = {};
+
     // Lists
     let reportsList: string[] = [];
     let purchasesList: string[] = [];
@@ -24,14 +23,16 @@
         try {
             const res = await fetch(`${API_URL}/state`);
             const data = await res.json();
-            
-            // Extract specific stocks
-            const stockMap = data.stock_map || {};
-            boxStock = stockMap["Soore Box"] || 0;
-            liquidStock = stockMap["Soore Liquid"] || 0;
-
+            stockMap = data.stock_map || {};
         } catch (e) { console.error("Backend offline?"); }
     }
+
+    // Derived: pick one product to headline the pill (first one alphabetically,
+    // or "Soore Box" if present, so the header doesn't jump around as products change)
+    $: headlineProduct = "Soore Box" in stockMap 
+        ? "Soore Box" 
+        : Object.keys(stockMap)[0] || "";
+    $: headlineStock = stockMap[headlineProduct] || 0;
 
     async function fetchLists() {
         try {
@@ -67,20 +68,21 @@
             
             <div class="text-right leading-tight">
                 <p class="text-xs text-blue-500 font-bold uppercase tracking-wider">Current Stock</p>
-                <p class="text-xl font-bold text-blue-900">{boxStock} <span class="text-sm font-normal text-blue-400">Boxes</span></p>
+                <p class="text-xl font-bold text-blue-900">{headlineStock} <span class="text-sm font-normal text-blue-400">{headlineProduct}</span></p>
             </div>
             <div class="h-10 w-10 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 font-bold text-lg">📦</div>
 
-            <div class="absolute top-full right-0 mt-2 w-48 bg-gray-800 text-white text-sm rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform translate-y-2 group-hover:translate-y-0 z-50 p-3">
+            <div class="absolute top-full right-0 mt-2 w-56 bg-gray-800 text-white text-sm rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform translate-y-2 group-hover:translate-y-0 z-50 p-3">
                 <p class="font-bold text-gray-300 border-b border-gray-600 pb-1 mb-2 text-xs uppercase">Full Inventory</p>
-                <div class="flex justify-between items-center mb-1">
-                    <span>Soore Box:</span>
-                    <span class="font-bold text-blue-300">{boxStock}</span>
-                </div>
-                <div class="flex justify-between items-center">
-                    <span>Soore Liquid:</span>
-                    <span class="font-bold text-green-300">{liquidStock}</span>
-                </div>
+                {#each Object.entries(stockMap) as [name, qty]}
+                    <div class="flex justify-between items-center mb-1 last:mb-0">
+                        <span>{name}:</span>
+                        <span class="font-bold text-blue-300">{qty}</span>
+                    </div>
+                {/each}
+                {#if Object.keys(stockMap).length === 0}
+                    <p class="text-gray-400 italic">No products yet</p>
+                {/if}
             </div>
 
         </div>

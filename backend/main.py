@@ -14,8 +14,10 @@ import storage
 import logic
 import reports
 from config import SETTINGS
-from models import SimulationRequest, DailyAction, ReportRequest, StockEntry
-
+from models import (
+    SimulationRequest, DailyAction, ReportRequest, StockEntry,
+    ProductInflow, ProductOpeningStock, ProductCreate, ProductRateUpdate
+)
 app = FastAPI()
 
 # --- CORS MIDDLEWARE ---
@@ -33,82 +35,55 @@ def simulate_month(req: SimulationRequest):
     customers = storage.get_customers()
     if not customers:
         raise HTTPException(status_code=400, detail="No customers found")
+    
+    all_products = {p["id"]: p for p in storage.get_products()}
+    if not all_products:
+        raise HTTPException(status_code=400, detail="No products configured. Add a product first.")
 
     start_date = datetime(req.year, req.month, 1)
     next_month = start_date.replace(day=28) + timedelta(days=4)
     end_date = next_month - timedelta(days=next_month.day)
     
-    # --- DUAL INVENTORY SETUP ---
-    current_stock_box = req.opening_stock_box
-    current_stock_liquid = req.opening_stock_liquid
-    current_stock_custom = req.custom_opening_stock
+     # --- DYNAMIC INVENTORY SETUP (keyed by product_id) ---
+    current_stock = {po.product_id: po.opening_stock for po in req.opening_stocks}
+    for pid in all_products:
+        current_stock.setdefault(pid, 0)  # any product missing from the request starts at 0
     
     current_inv = req.starting_invoice - 1 
     all_sales = []
     audit_log = [] 
     
-    # 1. Prepare Inflows Map & Purchase Log
+    # 1. Prepare Inflows Map & Purchase Log (accumulate per date, since multiple
+    #    rows can now share the same date — one row per product)
     inflows_map = {}
     purchase_log_data = [] 
     
-    total_bought_box = 0
-    total_bought_liquid = 0
-    total_bought_custom = 0
+    total_bought = {pid: 0 for pid in all_products}
 
     for entry in req.stock_inflows:
         if entry.date not in inflows_map:
             inflows_map[entry.date] = []
         inflows_map[entry.date].append(entry)
-        
-        # Track totals
-        total_bought_box += entry.qty_box
-        total_bought_liquid += entry.qty_liquid
-        total_bought_custom += entry.qty_custom
-        
-        # Log Box Purchase
-        if entry.qty_box > 0:
-            purchase_log_data.append({
-                "Date": entry.date,
-                "Item": "Soore Box",
-                "Purchase Invoice No": entry.invoice_no,
-                "Quantity Received": entry.qty_box
-            })
-            
-        # Log Liquid Purchase
-        if entry.qty_liquid > 0:
-            purchase_log_data.append({
-                "Date": entry.date,
-                "Item": "Soore Liquid",
-                "Purchase Invoice No": entry.invoice_no,
-                "Quantity Received": entry.qty_liquid
-            })
 
-        if entry.qty_custom > 0 and req.custom_product_name:
-            purchase_log_data.append({
-                "Date": entry.date,
-                "Item": req.custom_product_name,
-                "Purchase Invoice No": entry.invoice_no,
-                "Quantity Received": entry.qty_custom
-            })    
-
-    # Prepare Look-Ahead Lists
-    inflow_dates_box = sorted([
-        datetime.strptime(d, "%d/%m/%Y") 
-        for d, entries in inflows_map.items() 
-        if any(e.qty_box > 0 for e in entries)
-    ])
-    
-    inflow_dates_liquid = sorted([
-        datetime.strptime(d, "%d/%m/%Y") 
-        for d, entries in inflows_map.items() 
-        if any(e.qty_liquid > 0 for e in entries)
-    ])
-
-    inflow_dates_custom = sorted([
-        datetime.strptime(d, "%d/%m/%Y")
-        for d, entries in inflows_map.items()
-        if any(e.qty_custom > 0 for e in entries)
-    ])
+        for inflow in entry.inflows:
+            if inflow.qty > 0 and inflow.product_id in all_products:
+                total_bought[inflow.product_id] += inflow.qty
+                purchase_log_data.append({
+                    "Date": entry.date,
+                    "Item": all_products[inflow.product_id]["name"],
+                    "Purchase Invoice No": entry.invoice_no,
+                    "Quantity Received": inflow.qty
+                })
+  
+    # Prepare Look-Ahead Lists (one list of purchase dates per product)
+    inflow_dates_by_product = {pid: [] for pid in all_products}
+    for date_str, entries in inflows_map.items():
+        for entry in entries:
+            for inflow in entry.inflows:
+                if inflow.qty > 0 and inflow.product_id in inflow_dates_by_product:
+                    inflow_dates_by_product[inflow.product_id].append(datetime.strptime(date_str, "%d/%m/%Y"))
+    for pid in inflow_dates_by_product:
+        inflow_dates_by_product[pid].sort()
     
     # Trackers
     sales_delay_counter = 0 
@@ -121,33 +96,23 @@ def simulate_month(req: SimulationRequest):
         
         # --- A. HANDLE STOCK INFLOW ---
         if date_str in inflows_map:
-            custom_bal_str = f", {req.custom_product_name[:3]}={current_stock_custom}" if req.custom_product_name else ""
+            bal_str = ", ".join(f"{all_products[pid]['name'][:3]}={current_stock[pid]}" for pid in all_products)
             audit_log.append({
-                "Date": date_str, "Type": "Cycle Summary", 
-                "Info": f"Clos Bal: Box={current_stock_box}, Liq={current_stock_liquid}{custom_bal_str}",
-                "Customer": "-", "Quantity": "-", "Amount": "-", 
+                "Date": date_str, "Type": "Cycle Summary",
+                "Info": f"Clos Bal: {bal_str}",
+                "Customer": "-", "Quantity": "-", "Amount": "-",
                 "INVOICE": "-", "GSTIN": "-", "TAXABLE": "-", "CGST": "-", "SGST": "-"
             })
 
-            for inflow in inflows_map[date_str]:
-                if inflow.qty_box > 0:
-                    current_stock_box += inflow.qty_box
-                    audit_log.append({
-                        "Date": date_str, "Type": "Stock Added (Box)", "Info": f"Inv: {inflow.invoice_no}", 
-                        "Customer": "-", "Quantity": f"+{inflow.qty_box}", "Amount": "-"
-                    })
-                if inflow.qty_liquid > 0:
-                    current_stock_liquid += inflow.qty_liquid
-                    audit_log.append({
-                        "Date": date_str, "Type": "Stock Added (Liq)", "Info": f"Inv: {inflow.invoice_no}", 
-                        "Customer": "-", "Quantity": f"+{inflow.qty_liquid}", "Amount": "-"
-                    })
-
-                if inflow.qty_custom > 0 and req.custom_product_name:
-                    current_stock_custom += inflow.qty_custom
-                    audit_log.append({
-                        "Date": date_str, "Type": f"Stock Added ({req.custom_product_name})", "Info": f"Inv: {inflow.invoice_no}", 
-                        "Customer": "-", "Quantity": f"+{inflow.qty_custom}", "Amount": "-"})    
+            for entry in inflows_map[date_str]:
+                for inflow in entry.inflows:
+                    if inflow.qty > 0 and inflow.product_id in all_products:
+                        current_stock[inflow.product_id] += inflow.qty
+                        prod_name = all_products[inflow.product_id]["name"]
+                        audit_log.append({
+                            "Date": date_str, "Type": f"Stock Added ({prod_name})", "Info": "Purchase received",
+                            "Customer": "-", "Quantity": f"+{inflow.qty}", "Amount": "-"
+                        })
             
             start_delay = random.choice([0, 1, 2])
             if start_delay == 0:
@@ -167,85 +132,49 @@ def simulate_month(req: SimulationRequest):
             curr += timedelta(days=1)
             continue
 
-        # --- C. CALCULATE PACING ---
-        next_box_refill = end_date
-        for d_obj in inflow_dates_box:
-            if d_obj > curr:
-                next_box_refill = d_obj
-                break
-        days_until_box = (next_box_refill - curr).days
-        if days_until_box < 1: days_until_box = 1
-        
-        next_liq_refill = end_date
-        for d_obj in inflow_dates_liquid:
-            if d_obj > curr:
-                next_liq_refill = d_obj
-                break
-        days_until_liq = (next_liq_refill - curr).days
-        if days_until_liq < 1: days_until_liq = 1
+                # --- C & D. PACING + SALES, LOOPED OVER EVERY PRODUCT ---
+        daily_sales = []
+        statuses = {}
 
-        next_custom_refill = end_date
-        for d_obj in inflow_dates_custom:
-            if d_obj > curr: next_custom_refill = d_obj; break
-        days_until_custom = (next_custom_refill - curr).days
-        if days_until_custom < 1: days_until_custom = 1
+        for pid, prod in all_products.items():
+            next_refill = end_date
+            for d_obj in inflow_dates_by_product.get(pid, []):
+                if d_obj > curr:
+                    next_refill = d_obj
+                    break
+            days_until = (next_refill - curr).days
+            if days_until < 1: days_until = 1
 
-        # --- D. RUN SALES LOGIC (DUAL PASS WITH USER RATES) ---
-        
-        # PASS 1: SOORE BOX
-        current_stock_box, sales_box, current_inv, status_box = logic.decide_sales_for_day(
-            curr, current_stock_box, customers, current_inv, 
-            days_until_next_refill=days_until_box, 
-            rate_override=req.rate_box,  # <--- USES USER EDITED RATE
-            force_low_mode=force_low_sales
-        )
-        
-        # Inject Product Name
-        for s in sales_box: s["Item Name"] = "Soore Box"
-
-        # PASS 2: SOORE LIQUID
-        current_stock_liquid, sales_liquid, current_inv, status_liq = logic.decide_sales_for_day(
-            curr, current_stock_liquid, customers, current_inv, 
-            days_until_next_refill=days_until_liq, 
-            rate_override=req.rate_liquid, # <--- USES USER EDITED RATE
-            force_low_mode=force_low_sales
-        )
-
-        # Inject Product Name
-        for s in sales_liquid: s["Item Name"] = "Soore Liquid"
-
-        # PASS 3: CUSTOM PRODUCT (NEW)
-        sales_custom = []
-        status_custom = "Active"
-        if req.custom_product_name:
-            current_stock_custom, sales_custom, current_inv, status_custom = logic.decide_sales_for_day(
-                curr, current_stock_custom, customers, current_inv, 
-                days_until_next_refill=days_until_custom, rate_override=req.custom_product_rate, force_low_mode=force_low_sales, product_name=req.custom_product_name
+            new_stock, sales, current_inv, status = logic.decide_sales_for_day(
+                curr, current_stock[pid], customers, current_inv,
+                days_until_next_refill=days_until,
+                rate_override=prod["rate"],   # <--- LIVE RATE FROM PRODUCTS TABLE
+                force_low_mode=force_low_sales,
+                product_name=prod["name"]
             )
-            for s in sales_custom: s["Item Name"] = req.custom_product_name
-        
+            current_stock[pid] = new_stock
+            statuses[pid] = status
+
+            for s in sales:
+                s["Item Name"] = prod["name"]
+            daily_sales.extend(sales)
+
         if force_low_sales: force_low_sales = False
 
-        # --- E. LOGGING ---
-        daily_sales = sales_box + sales_liquid + sales_custom
-        
+       # --- E. LOGGING ---
         if not daily_sales:
-            info_msg = "-"
-            if status_box != "Active": info_msg = status_box
-            elif status_liq != "Active": info_msg = status_liq
-            elif status_custom != "Active" and req.custom_product_name: info_msg = status_custom
-            
+            info_msg = next((s for s in statuses.values() if s != "Active"), "-")
             audit_log.append({
                 "Date": date_str, "Type": "No Sales", "Info": info_msg,
                 "Customer": "-", "Quantity": "-", "Amount": "-"
             })
         else:
             daily_sales.sort(key=lambda x: x["INVOICE"])
-            
+
             for s in daily_sales:
                 audit_log.append({
                     "Date": date_str, "Type": "Sale", "Info": s["Item Name"],
-                    "Customer": s.get("_customer_name", "Unknown"), 
+                    "Customer": s.get("_customer_name", "Unknown"),
                     "Quantity": s["_qty"], "Amount": s["TAXABLE"],
                     "INVOICE": s["INVOICE"], "GSTIN": s["GSTIN"],
                     "TAXABLE": s["TAXABLE"], "CGST": s["CGST"], "SGST": s["SGST"]
@@ -260,43 +189,50 @@ def simulate_month(req: SimulationRequest):
     filename = reports.generate_excel_report(all_sales, req.month, req.year)
     reports.save_audit_log(audit_log, month_name, req.year)
     
-    # Save Purchase Log Summary
-    purchase_log_data.append({"Date": "TOTAL", "Item": "Soore Box", "Quantity Received": total_bought_box})
-    purchase_log_data.append({"Date": "TOTAL", "Item": "Soore Liquid", "Quantity Received": total_bought_liquid})
-    if req.custom_product_name: # NEW
-        purchase_log_data.append({"Date": "TOTAL", "Item": req.custom_product_name, "Quantity Received": total_bought_custom})
-
+    for pid, qty in total_bought.items():
+        purchase_log_data.append({"Date": "TOTAL", "Item": all_products[pid]["name"], "Quantity Received": qty})
 
     reports.save_purchase_log(purchase_log_data, month_name, req.year)
 
     total_revenue = sum(s["TAXABLE"] for s in all_sales)
 
     # 5. Save Monthly Snapshot to Cloud (monthly_snapshots table)
+    # NOTE: box_stock/liquid_stock columns are legacy — we still populate them
+    # by name-matching so old dashboards/reports reading this table don't break,
+    # but the authoritative per-product data now lives in product_stock.
+    box_id = next((pid for pid, p in all_products.items() if p["name"] == "Soore Box"), None)
+    liquid_id = next((pid for pid, p in all_products.items() if p["name"] == "Soore Liquid"), None)
+
     snapshot = {
         "month": req.month,
         "year": req.year,
-        "box_stock": current_stock_box,
-        "liquid_stock": current_stock_liquid,
-        "custom_stock": current_stock_custom if req.custom_product_name else 0,
+        "box_stock": current_stock.get(box_id, 0),
+        "liquid_stock": current_stock.get(liquid_id, 0),
+        "custom_stock": 0,  # legacy field — kept for backward compatibility with old rows
+        "stock_snapshot": {all_products[pid]["name"]: qty for pid, qty in current_stock.items()},
         "last_invoice": current_inv,
         "total_revenue": total_revenue,
         "snapshot_date": datetime.now().isoformat()
     }
-    
-    # Save the new snapshot row to your Supabase table
     storage.save_snapshot(snapshot)
 
-    # NEW Output String formatting
-    final_stock_str = f"Box: {current_stock_box}, Liq: {current_stock_liquid}"
-    if req.custom_product_name:
-        final_stock_str += f", {req.custom_product_name[:3]}: {current_stock_custom}"
-    
+    # --- SYNC LIVE STATE (every product, generically) ---
+    storage.save_state({
+        "stock_map": {all_products[pid]["name"]: qty for pid, qty in current_stock.items()},
+        "last_invoice": current_inv,
+        "total_sales_val": total_revenue
+    })
+
+    final_stock_str = ", ".join(f"{all_products[pid]['name']}: {qty}" for pid, qty in current_stock.items())
+
     return {
-        "message": "Simulation Complete", 
-        "file": filename, 
+        "message": "Simulation Complete",
+        "file": filename,
         "total_sales": total_revenue,
         "final_stock": final_stock_str
     }
+
+    # NEW Output String formatting
 
 @app.get("/state")
 def get_state(): return storage.load_state()
@@ -313,8 +249,12 @@ def daily_action(act: DailyAction):
     prod_name = act.product_name if act.product_name else "Soore Box"
     current_prod_stock = state["stock_map"].get(prod_name, 0)
     
-    # Rate logic for Everyday Mode
-    rate = SETTINGS["rate_liquid"] if "Liquid" in prod_name else SETTINGS["rate_box"]
+    # Rate now comes from the products table (respects any rate edits),
+    # instead of a hardcoded "Box vs Liquid" name check.
+    all_products = storage.get_products()
+    matching_product = next((p for p in all_products if p["name"] == prod_name), None)
+    rate = matching_product["rate"] if matching_product else SETTINGS.get("rate_box", 350)
+
 
     if act.action == "add_stock":
         current_prod_stock += act.qty
@@ -326,7 +266,8 @@ def daily_action(act: DailyAction):
         new_stock, sales, new_inv, status = logic.decide_sales_for_day(
             today, current_prod_stock, customers, state["last_invoice"], 
             days_until_next_refill=3,
-            rate_override=rate
+            rate_override=rate,
+            product_name=prod_name
         )
         
         if not sales and new_stock == current_prod_stock: return {"message": f"No sales ({status})."}
@@ -396,3 +337,26 @@ def download_report(filename: str):
     if signed_url:
         return RedirectResponse(url=signed_url)
     raise HTTPException(status_code=404, detail="Could not generate download link")
+
+@app.get("/products")
+def get_products():
+    """Returns all products with id, name, rate."""
+    return {"products": storage.get_products()}
+
+@app.post("/products")
+def create_product(req: ProductCreate):
+    """Creates a new product (and its zero-stock row) permanently in the DB."""
+    existing = [p for p in storage.get_products() if p["name"].strip().lower() == req.name.strip().lower()]
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Product '{req.name}' already exists")
+
+    new_product = storage.add_product(req.name, req.rate)
+    if not new_product:
+        raise HTTPException(status_code=500, detail="Failed to create product")
+    return {"message": f"Product '{req.name}' created", "product": new_product}
+
+@app.put("/products/{product_id}")
+def update_product_rate(product_id: int, req: ProductRateUpdate):
+    """Updates a product's rate going forward. Past reports keep their original rate."""
+    storage.update_product_rate(product_id, req.rate)
+    return {"message": "Rate updated"}

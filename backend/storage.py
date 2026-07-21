@@ -8,30 +8,23 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def load_state():
     """
-    Fetches the live inventory and invoice stats from Supabase Cloud.
-    Replaces reading from 'store_state.json'.
+    Fetches live invoice/revenue stats from app_state, and per-product
+    stock from product_stock (joined with products for names).
     """
     try:
-        # Get the global state row (id=1)
-        response = supabase.table("app_state").select("*").eq("id", 1).single().execute()
+        response = supabase.table("app_state").select("id, last_invoice, total_revenue").eq("id", 1).single().execute()
         data = response.data
-        
-        # Convert DB columns back to your App's expected format (stock_map)
+
         return {
-            "stock_map": {
-                "Soore Box": data.get("stock_box", 0),
-                "Soore Liquid": data.get("stock_liquid", 0)
-            },
+            "stock_map": get_product_stock_map(),
             "last_invoice": data.get("last_invoice", 4520),
             "total_sales_val": data.get("total_revenue", 0),
-            # We don't load full history into memory anymore, it's safe in the DB
             "sales_log": [] 
         }
     except Exception as e:
         print(f"⚠️ DB Error loading state: {e}")
-        # Fallback safe mode if internet is down
         return {
-            "stock_map": {"Soore Box": 0, "Soore Liquid": 0}, 
+            "stock_map": {}, 
             "last_invoice": 4520, 
             "total_sales_val": 0, 
             "sales_log": []
@@ -39,26 +32,73 @@ def load_state():
 
 def save_state(state):
     """
-    Updates the live inventory in Supabase Cloud.
-    Replaces writing to 'store_state.json'.
+    Updates last_invoice/total_revenue in app_state, and syncs stock
+    for every product present in state['stock_map'] individually.
     """
     try:
-        stock_map = state.get("stock_map", {})
-        
-        # Map app data to DB columns
         payload = {
-            "stock_box": stock_map.get("Soore Box", 0),
-            "stock_liquid": stock_map.get("Soore Liquid", 0),
-            "stock_custom": stock_map.get("Soore Powder", 0),
             "last_invoice": state.get("last_invoice"),
             "total_revenue": state.get("total_sales_val")
         }
-        
-        # Update row 1
         supabase.table("app_state").update(payload).eq("id", 1).execute()
-        
+
+        stock_map = state.get("stock_map", {})
+        for product_name, stock_qty in stock_map.items():
+            update_product_stock(product_name, stock_qty)
     except Exception as e:
         print(f"❌ DB Error saving state: {e}")
+
+
+# --- NEW: PRODUCT MANAGEMENT ---
+
+def get_products():
+    """Fetches all products (id, name, rate) from Supabase."""
+    try:
+        response = supabase.table("products").select("*").execute()
+        return response.data
+    except Exception as e:
+        print(f"❌ DB Error fetching products: {e}")
+        return []
+
+def get_product_stock_map():
+    """Returns {product_name: current_stock} by joining product_stock -> products."""
+    try:
+        response = supabase.table("product_stock").select("current_stock, products(name)").execute()
+        stock_map = {}
+        for row in response.data:
+            name = row["products"]["name"]
+            stock_map[name] = row["current_stock"]
+        return stock_map
+    except Exception as e:
+        print(f"❌ DB Error fetching product stock: {e}")
+        return {}
+
+def update_product_stock(product_name, new_stock):
+    """Looks up a product by name and updates its stock row."""
+    try:
+        prod = supabase.table("products").select("id").eq("name", product_name).single().execute()
+        product_id = prod.data["id"]
+        supabase.table("product_stock").update({"current_stock": new_stock}).eq("product_id", product_id).execute()
+    except Exception as e:
+        print(f"❌ DB Error updating stock for '{product_name}': {e}")
+
+def add_product(name, rate):
+    """Creates a new product + its initial (zero) stock row."""
+    try:
+        result = supabase.table("products").insert({"name": name, "rate": rate}).execute()
+        new_id = result.data[0]["id"]
+        supabase.table("product_stock").insert({"product_id": new_id, "current_stock": 0}).execute()
+        return result.data[0]
+    except Exception as e:
+        print(f"❌ DB Error adding product '{name}': {e}")
+        return None
+
+def update_product_rate(product_id, rate):
+    """Updates a product's rate going forward. Past reports are unaffected since they store the rate used at simulation time."""
+    try:
+        supabase.table("products").update({"rate": rate}).eq("id", product_id).execute()
+    except Exception as e:
+        print(f"❌ DB Error updating rate for product {product_id}: {e}")
 
 def get_customers():
     """
