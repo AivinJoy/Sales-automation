@@ -1,3 +1,5 @@
+<!--sales-ui\src\lib\components\EverydayDashboard.svelte -->
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import { API_URL } from '$lib/config';
@@ -6,9 +8,9 @@
     let stockMap: Record<string, number> = {};
     let totalSalesVal = 0;
     
-    // Product Selector
-    const products = ["Soore Box", "Soore Liquid"];
-    let selectedProduct = products[0]; // Default to Box
+    // Product Selector — now fetched from the DB instead of hardcoded
+    let products: string[] = [];
+    let selectedProduct = "";
 
     // Action Form
     let addQty = 0;
@@ -17,6 +19,19 @@
 
     // Derived State: Automatically updates when stockMap or selectedProduct changes
     $: currentStock = stockMap[selectedProduct] || 0;
+
+    async function fetchProducts() {
+        try {
+            const res = await fetch(`${API_URL}/products`);
+            const data = await res.json();
+            products = (data.products || []).map((p: any) => p.name);
+            if (!selectedProduct && products.length > 0) {
+                selectedProduct = products[0];
+            }
+        } catch (e) {
+            console.error("Could not fetch products", e);
+        }
+    }
 
     async function fetchState() {
         try {
@@ -32,7 +47,10 @@
         } 
     }
 
-    onMount(() => { fetchState(); });
+    onMount(async () => { 
+        await fetchProducts();
+        await fetchState(); 
+    });
 
     async function performAction(action: 'add_stock' | 'simulate') {
         if (action === 'add_stock' && addQty <= 0) {

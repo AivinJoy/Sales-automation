@@ -1,15 +1,45 @@
+<!-- sales-ui\src\lib\components\HistoryBackfill.svelte -->
+
 <script lang="ts">
     import { onMount } from 'svelte';
     import { API_URL } from '$lib/config';
 
+
+
     // Types matching the new Backend Model
-    interface StockEntry { 
-        date: string; 
-        invoice_no: string; 
-        qty_box: number; 
-        qty_liquid: number; 
+    interface Product {
+        id: number;
+        name: string;
+        rate: number;
     }
-    
+
+    interface InflowLineItem {
+        product_id: number | null;
+        qty: number;
+    }
+
+    interface InflowRow {
+        date: string;
+        invoice_no: string;
+        items: InflowLineItem[];
+    }
+
+    // Converts DD/MM/YYYY -> YYYY-MM-DD (what <input type="date"> needs to display a value)
+    function toISODate(dmy: string): string {
+        if (!dmy) return "";
+        const [d, m, y] = dmy.split("/");
+        if (!d || !m || !y) return "";
+        return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    // Converts YYYY-MM-DD (native input's value) -> DD/MM/YYYY (what the backend expects)
+    function toDMYDate(iso: string): string {
+        if (!iso) return "";
+        const [y, m, d] = iso.split("-");
+        if (!d || !m || !y) return "";
+        return `${d}/${m}/${y}`;
+    }
+
     interface SimulationResult { 
         message: string; 
         file: string; 
@@ -17,70 +47,151 @@
         final_stock: string; 
     }
     
+    let products: Product[] = []
+
     // Form State
     let simMonth: number = 6;
     let simYear: number = 2025;
-    
-    // Dual Opening Stock
-    let openingStockBox: number = 0;
-    let openingStockLiquid: number = 0;
-    
     let startingInvoice: number = 4520;
+    
+    // Dynamic opening stock: { [product_id]: qty }
+    let openingStocks: Record<number, number> = {};
+
+    // Stock inflow rows — one product per row now
+    let stockInflows: InflowRow[] = [];
+
+    // New Product form
+    let newProductName = "";
+    let newProductRate = 0;
+    let addingProduct = false;
 
     // EDITABLE RATES (Default values, but user can change)
     let rateBox: number = 350;
     let rateLiquid: number = 280;
     
-    // Default Inflow Row (Dual Qty)
-    let stockInflows: StockEntry[] = [{ 
-        date: "05/06/2025", 
-        invoice_no: "INV-001", 
-        qty_box: 0, 
-        qty_liquid: 0 
-    }];
-    
     let simResult: SimulationResult | null = null;
     let isLoading = false;
+
+    async function fetchProducts() {
+        try {
+            const res = await fetch(`${API_URL}/products`);
+            const data = await res.json();
+            products = data.products || [];
+
+            for (const p of products) {
+                if (!(p.id in openingStocks)) openingStocks[p.id] = 0;
+            }
+            openingStocks = { ...openingStocks };
+
+            if (stockInflows.length === 0 && products.length > 0) {
+                stockInflows = [{ date: "", invoice_no: "INV-001", items: [{ product_id: products[0].id, qty: 0 }] }];
+            }
+        } catch (e) {
+            console.error("Could not fetch products", e);
+        }
+    }
 
     async function fetchLastState() {
         try {
             const res = await fetch(`${API_URL}/state`);
             const data = await res.json();
-            
             startingInvoice = data.last_invoice + 1;
-            
+
             const stockMap = data.stock_map || {};
-            openingStockBox = stockMap["Soore Box"] || 0;
-            openingStockLiquid = stockMap["Soore Liquid"] || 0;
-            
-        } catch (e) { 
-            console.error("Could not fetch state", e); 
+            for (const p of products) {
+                openingStocks[p.id] = stockMap[p.name] || 0;
+            }
+            openingStocks = { ...openingStocks };
+        } catch (e) {
+            console.error("Could not fetch state", e);
         }
     }
 
-    onMount(() => { fetchLastState(); });
+    onMount(async () => {
+        await fetchProducts();
+        await fetchLastState();
+    });
+
+    function nextInvoicePlaceholder(): string {
+        return `INV-${String(stockInflows.length + 1).padStart(3, '0')}`;
+    }
 
     function addInflowRow() {
-        stockInflows = [...stockInflows, { date: "", invoice_no: "", qty_box: 0, qty_liquid: 0 }];
+        const defaultProduct = products.length > 0 ? products[0].id : null;
+        stockInflows = [...stockInflows, { date: "", invoice_no: nextInvoicePlaceholder(), items: [{ product_id: defaultProduct, qty: 0 }] }];
     }
 
     function removeInflowRow(index: number) {
         stockInflows = stockInflows.filter((_, i) => i !== index);
     }
 
-    async function runFullSimulation() {
+    function addLineItem(rowIndex: number) {
+        const defaultProduct = products.length > 0 ? products[0].id : null;
+        stockInflows[rowIndex].items = [...stockInflows[rowIndex].items, { product_id: defaultProduct, qty: 0 }];
+    }
+
+    function removeLineItem(rowIndex: number, itemIndex: number) {
+        stockInflows[rowIndex].items = stockInflows[rowIndex].items.filter((_, i) => i !== itemIndex);
+    }
+
+    async function addNewProduct() {
+        if (!newProductName.trim() || newProductRate <= 0) {
+            alert("Enter a valid product name and rate.");
+            return;
+        }
+        addingProduct = true;
+        try {
+            const res = await fetch(`${API_URL}/products`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: newProductName, rate: newProductRate })
+            });
+            if (!res.ok) throw new Error((await res.json()).detail || "Failed to add product");
+
+            newProductName = "";
+            newProductRate = 0;
+            await fetchProducts();
+        } catch (error) {
+            alert("Error: " + (error as Error).message);
+        } finally {
+            addingProduct = false;
+        }
+    }
+
+    async function updateProductRate(product: Product) {
+        try {
+            const res = await fetch(`${API_URL}/products/${product.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rate: product.rate })
+            });
+            if (!res.ok) throw new Error("Failed to update rate");
+        } catch (error) {
+            alert("Error updating rate: " + (error as Error).message);
+        }
+    }
+
+     async function runFullSimulation() {
         isLoading = true; simResult = null; 
         try {
             const payload = {
                 month: simMonth, 
                 year: simYear,
-                opening_stock_box: openingStockBox,
-                opening_stock_liquid: openingStockLiquid,
+                opening_stocks: Object.entries(openingStocks).map(([product_id, opening_stock]) => ({
+                    product_id: Number(product_id),
+                    opening_stock
+                })),
                 starting_invoice: startingInvoice,
-                // --- SEND USER-DEFINED RATES ---
-                rate_box: rateBox,
-                rate_liquid: rateLiquid,
                 stock_inflows: stockInflows
+                    .filter(row => row.date)
+                    .map(row => ({
+                        date: row.date,
+                        invoice_no: row.invoice_no,
+                        inflows: row.items
+                            .filter(item => item.product_id !== null && item.qty > 0)
+                            .map(item => ({ product_id: item.product_id, qty: item.qty }))
+                    }))
+                    .filter(entry => entry.inflows.length > 0)
             };
             
             const res = await fetch(`${API_URL}/simulate_month`, {
@@ -132,35 +243,53 @@
         </div>
     </div>
 
-    <div class="grid grid-cols-2 gap-6 mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100">
-        <div>
-            <label class="block text-sm font-semibold mb-1 text-blue-800">
-                Rate: Soore Box (₹)
-                <input type="number" bind:value={rateBox} class="mt-1 w-full p-2 border border-blue-300 rounded bg-white font-bold text-blue-900 shadow-sm focus:ring-2 focus:ring-blue-400 outline-none">
-            </label>
+    <!-- PRODUCTS & RATES (replaces the old fixed Box/Liquid rate boxes + custom product section) -->
+    <div class="mb-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
+        <p class="text-sm font-bold text-blue-800 mb-3">Products & Rates</p>
+        <div class="space-y-2 mb-4">
+            {#each products as product}
+                <div class="flex items-center gap-3">
+                    <span class="w-40 font-semibold text-blue-900 truncate">{product.name}</span>
+                    <input 
+                        type="number" 
+                        bind:value={product.rate}
+                        on:change={() => updateProductRate(product)}
+                        class="w-32 p-2 border border-blue-300 rounded bg-white font-bold text-blue-900 focus:ring-2 focus:ring-blue-400 outline-none"
+                    >
+                    <span class="text-xs text-blue-400">₹ (editable, saved automatically)</span>
+                </div>
+            {/each}
         </div>
-        <div>
-            <label class="block text-sm font-semibold mb-1 text-blue-800">
-                Rate: Soore Liquid (₹)
-                <input type="number" bind:value={rateLiquid} class="mt-1 w-full p-2 border border-blue-300 rounded bg-white font-bold text-blue-900 shadow-sm focus:ring-2 focus:ring-blue-400 outline-none">
-            </label>
+
+        <div class="flex items-end gap-3 pt-3 border-t border-blue-200">
+            <div>
+                <label for="newProductNameInput" class="block text-xs font-semibold mb-1 text-blue-700">New Product Name</label>
+                <input id="newProductNameInput" type="text" bind:value={newProductName} placeholder="e.g. Soore Powder" class="p-2 border border-blue-300 rounded bg-white text-blue-900 focus:ring-2 focus:ring-blue-400 outline-none">
+            </div>
+            <div>
+                <label for="newProductRateInput" class="block text-xs font-semibold mb-1 text-blue-700">Rate (₹)</label>
+                <input id="newProductRateInput" type="number" bind:value={newProductRate} class="w-28 p-2 border border-blue-300 rounded bg-white text-blue-900 focus:ring-2 focus:ring-blue-400 outline-none">
+            </div>
+            <button 
+                on:click={addNewProduct}
+                disabled={addingProduct}
+                class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded disabled:bg-gray-400">
+                {addingProduct ? 'Adding...' : '+ New Product'}
+            </button>
         </div>
-        <p class="col-span-2 text-xs text-blue-500 italic">You can edit these rates for this simulation.</p>
     </div>
 
+    <!-- OPENING STOCK (dynamic, one field per product) -->
+    <p class="block text-sm font-semibold mb-2">Opening Stock</p>
     <div class="grid grid-cols-3 gap-6 mb-6">
-        <div>
-            <label class="block text-sm font-semibold mb-1 text-gray-700">
-                Opening Stock (Box)
-                <input type="number" bind:value={openingStockBox} class="mt-1 w-full p-2 border rounded focus:ring-2 focus:ring-gray-300 outline-none">
-            </label>
-        </div>
-        <div>
-            <label class="block text-sm font-semibold mb-1 text-gray-700">
-                Opening Stock (Liquid)
-                <input type="number" bind:value={openingStockLiquid} class="mt-1 w-full p-2 border rounded focus:ring-2 focus:ring-gray-300 outline-none">
-            </label>
-        </div>
+        {#each products as product}
+            <div>
+                <label class="block text-sm font-semibold mb-1 text-gray-700">
+                    {product.name}
+                    <input type="number" bind:value={openingStocks[product.id]} class="mt-1 w-full p-2 border rounded focus:ring-2 focus:ring-gray-300 outline-none">
+                </label>
+            </div>
+        {/each}
         <div>
             <label class="block text-sm font-semibold mb-1">
                 Starting Invoice No.
@@ -171,65 +300,53 @@
     </div>
 
     <p class="block text-sm font-semibold mb-2">Stock Inflows (Purchases)</p>
-    <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
-        <div class="grid grid-cols-12 gap-2 mb-2 text-xs font-bold text-gray-500 uppercase text-center">
-            <div class="col-span-3 text-left">Date</div>
-            <div class="col-span-3 text-left">Inv No</div>
-            <div class="col-span-2">Qty Box</div>
-            <div class="col-span-2">Qty Liq</div>
-            <div class="col-span-2"></div>
-        </div>
-        
+    <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200 space-y-4">
         {#each stockInflows as inflow, i}
-            <div class="grid grid-cols-12 gap-2 mb-2 items-center">
-                <div class="col-span-3">
-                    <input 
-                        type="text" 
-                        aria-label="Purchase Date" 
-                        bind:value={inflow.date} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none" 
-                        placeholder="DD/MM/YYYY"
-                    >
+            <div class="bg-white p-3 rounded-lg border border-gray-200">
+                <div class="grid grid-cols-12 gap-2 mb-3 items-center">
+                    <div class="col-span-5">
+                        <label for={`inflowDate-${i}`} class="block text-xs font-bold text-gray-500 uppercase mb-1">Date</label>
+                        <input 
+                            id={`inflowDate-${i}`} 
+                            type="date" 
+                            value={toISODate(inflow.date)}
+                            on:change={(e) => inflow.date = toDMYDate(e.currentTarget.value)}
+                            class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none"
+                        >
+                    </div>
+                    <div class="col-span-5">
+                        <label for={`inflowInvNo-${i}`} class="block text-xs font-bold text-gray-500 uppercase mb-1">Inv No</label>
+                        <input id={`inflowInvNo-${i}`} type="text" bind:value={inflow.invoice_no} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-mono text-sm" placeholder="BILL-123">
+                    </div>
+                    <div class="col-span-2 text-right">
+                        <button on:click={() => removeInflowRow(i)} class="text-red-500 hover:text-red-700 font-bold px-2 cursor-pointer" title="Remove Entire Bill" aria-label="Remove Bill">✕ Bill</button>
+                    </div>
                 </div>
-                <div class="col-span-3">
-                    <input 
-                        type="text" 
-                        aria-label="Invoice Number" 
-                        bind:value={inflow.invoice_no} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-mono text-sm" 
-                        placeholder="BILL-123"
-                    >
-                </div>
-                <div class="col-span-2">
-                    <input 
-                        type="number" 
-                        aria-label="Qty Box" 
-                        bind:value={inflow.qty_box} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" 
-                        placeholder="0"
-                    >
-                </div>
-                <div class="col-span-2">
-                    <input 
-                        type="number" 
-                        aria-label="Qty Liquid" 
-                        bind:value={inflow.qty_liquid} 
-                        class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" 
-                        placeholder="0"
-                    >
-                </div>
-                <div class="col-span-2 text-center">
-                    <button 
-                        on:click={() => removeInflowRow(i)} 
-                        class="text-red-500 hover:text-red-700 font-bold px-2 cursor-pointer" 
-                        title="Remove Entry"
-                        aria-label="Remove Row"
-                    >✕</button>
+
+                <div class="pl-2 border-l-2 border-blue-100 space-y-2">
+                    {#each inflow.items as item, j}
+                        <div class="grid grid-cols-12 gap-2 items-center">
+                            <div class="col-span-6">
+                                <select bind:value={item.product_id} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none bg-white text-sm">
+                                    {#each products as product}
+                                        <option value={product.id}>{product.name}</option>
+                                    {/each}
+                                </select>
+                            </div>
+                            <div class="col-span-4">
+                                <input type="number" aria-label="Qty" bind:value={item.qty} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" placeholder="Qty">
+                            </div>
+                            <div class="col-span-2 text-center">
+                                <button on:click={() => removeLineItem(i, j)} class="text-red-400 hover:text-red-600 font-bold px-2 cursor-pointer" title="Remove Product Line" aria-label="Remove Product Line">✕</button>
+                            </div>
+                        </div>
+                    {/each}
+                    <button on:click={() => addLineItem(i)} class="text-xs text-blue-600 font-semibold hover:underline cursor-pointer">+ Add Product to This Bill</button>
                 </div>
             </div>
         {/each}
         
-        <button on:click={addInflowRow} class="text-sm text-purple-600 font-semibold hover:underline mt-2 cursor-pointer">+ Add Another Purchase</button>
+        <button on:click={addInflowRow} class="text-sm text-purple-600 font-semibold hover:underline mt-2 cursor-pointer">+ Add Another Purchase Bill</button>
     </div>
     
     <hr class="my-6">

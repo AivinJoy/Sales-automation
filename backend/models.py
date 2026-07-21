@@ -1,27 +1,34 @@
+# backend\models.py
+
 from pydantic import BaseModel
 from typing import List
+
+class ProductInflow(BaseModel):
+    product_id: int
+    qty: int
 
 class StockEntry(BaseModel):
     date: str
     invoice_no: str
-    qty_box: int       # <--- Quantity for Soore Box
-    qty_liquid: int    # <--- Quantity for Soore Liquid
+    inflows: List[ProductInflow]
 
+class ProductOpeningStock(BaseModel):
+    product_id: int
+    opening_stock: int    
 class SimulationRequest(BaseModel):
     month: int
     year: int
-    
-    # Opening Stocks for both products
-    opening_stock_box: int
-    opening_stock_liquid: int
-    # NEW: Editable Rates
-    rate_box: float
-    rate_liquid: float
+
+    # Dynamic opening stock — one entry per product, no more hardcoded fields
+    opening_stocks: List[ProductOpeningStock]
 
     starting_invoice: int
-    
-    # List of purchases (each entry has both Box and Liquid qtys)
+
+    # List of purchases (each entry can carry any number of products)
     stock_inflows: List[StockEntry]
+    # NOTE: rates are no longer sent by the frontend. main.py reads each
+    # product's current rate from the products table at simulation time,
+    # so rate edits apply automatically without changing this request shape.
 
 class DailyAction(BaseModel):
     action: str
@@ -31,3 +38,10 @@ class DailyAction(BaseModel):
 class ReportRequest(BaseModel):
     year: int
     period: str  # values will be "annual", "h1", "h2"
+
+class ProductCreate(BaseModel):
+    name: str
+    rate: float
+
+class ProductRateUpdate(BaseModel):
+    rate: float

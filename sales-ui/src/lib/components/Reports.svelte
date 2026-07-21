@@ -1,3 +1,6 @@
+<!-- sales-ui\src\lib\components\Reports.svelte -->
+
+
 <script lang="ts">
     import { API_URL } from '$lib/config';
     export let filename: string;
@@ -88,7 +91,7 @@
                             <tr class="border-b border-gray-100 hover:bg-gray-50 {getRowColor(row)}">
                                 {#each Object.entries(row) as [key, val]}
                                     {#if !key.startsWith('_')}
-                                        <td class="p-3 truncate max-w-50" title={String(val)}>{val}</td>
+                                        <td class="p-3 max-w-xs whitespace-normal wrap-break-word" title={String(val)}>{val}</td>
                                     {/if}
                                 {/each}
                             </tr>

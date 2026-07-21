@@ -1,3 +1,5 @@
+# backend\reports.py
+
 import pandas as pd
 import io
 import calendar
@@ -210,22 +212,36 @@ def get_report_url(filename):
     except Exception as e:
         return None
 
+def _month_year_sort_key(filename):
+    """
+    Parses a filename like 'June_2025.xlsx' or 'June_2025_Purchases.json'
+    into a (year, month_number) tuple for correct chronological sorting.
+    Files that don't match the pattern sort last.
+    """
+    name_map = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
+    base = filename.replace(".xlsx", "").replace("_Purchases.json", "")
+    parts = base.split("_")
+    if len(parts) >= 2:
+        month_str, year_str = parts[0].lower(), parts[1]
+        if month_str in name_map and year_str.isdigit():
+            return (int(year_str), name_map[month_str])
+    return (0, 0)  # unrecognized filenames sort to the bottom
+
 def list_cloud_reports():
-    """Lists Excel files in the Supabase bucket."""
+    """Lists Excel files in the Supabase bucket, newest month first."""
     try:
         res = supabase.storage.from_("reports").list()
-        # Filter for .xlsx
         files = [f['name'] for f in res if f['name'].endswith('.xlsx')]
-        return sorted(files, reverse=True)
+        return sorted(files, key=_month_year_sort_key, reverse=True)
     except:
         return []
 
 def list_cloud_purchases():
-    """Lists purchase logs in the Supabase bucket."""
+    """Lists purchase logs in the Supabase bucket, newest month first."""
     try:
         res = supabase.storage.from_("reports").list()
         files = [f['name'] for f in res if f['name'].endswith('_Purchases.json')]
-        return sorted(files, reverse=True)
+        return sorted(files, key=_month_year_sort_key, reverse=True)
     except:
         return []
 
