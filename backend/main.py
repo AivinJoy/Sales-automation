@@ -43,11 +43,17 @@ def simulate_month(req: SimulationRequest):
     start_date = datetime(req.year, req.month, 1)
     next_month = start_date.replace(day=28) + timedelta(days=4)
     end_date = next_month - timedelta(days=next_month.day)
-    
-     # --- DYNAMIC INVENTORY SETUP (keyed by product_id) ---
+
+    # --- DYNAMIC INVENTORY SETUP (keyed by product_id) ---
     current_stock = {po.product_id: po.opening_stock for po in req.opening_stocks}
     for pid in all_products:
         current_stock.setdefault(pid, 0)  # any product missing from the request starts at 0
+
+    # --- ACTIVE RATE TRACKING (keyed by product_id) ---
+    # Starts at each product's current stored rate. A purchase bill can update
+    # this mid-month (see section A below), and everything from that bill's
+    # date onward uses the new rate — earlier days keep using the old one.
+    active_rate = {pid: prod["rate"] for pid, prod in all_products.items()}
     
     current_inv = req.starting_invoice - 1 
     all_sales = []
@@ -109,8 +115,16 @@ def simulate_month(req: SimulationRequest):
                     if inflow.qty > 0 and inflow.product_id in all_products:
                         current_stock[inflow.product_id] += inflow.qty
                         prod_name = all_products[inflow.product_id]["name"]
+                        info_msg = "Purchase received"
+
+                        # Rate change on this bill? Apply from this date onward.
+                        if inflow.rate is not None and inflow.rate != active_rate[inflow.product_id]:
+                            old_rate = active_rate[inflow.product_id]
+                            active_rate[inflow.product_id] = inflow.rate
+                            info_msg = f"Purchase received (Rate changed: {old_rate} -> {inflow.rate})"
+
                         audit_log.append({
-                            "Date": date_str, "Type": f"Stock Added ({prod_name})", "Info": "Purchase received",
+                            "Date": date_str, "Type": f"Stock Added ({prod_name})", "Info": info_msg,
                             "Customer": "-", "Quantity": f"+{inflow.qty}", "Amount": "-"
                         })
             
@@ -148,7 +162,7 @@ def simulate_month(req: SimulationRequest):
             new_stock, sales, current_inv, status = logic.decide_sales_for_day(
                 curr, current_stock[pid], customers, current_inv,
                 days_until_next_refill=days_until,
-                rate_override=prod["rate"],   # <--- LIVE RATE FROM PRODUCTS TABLE
+                rate_override=active_rate[pid],   # <--- CAN CHANGE MID-MONTH VIA A PURCHASE BILL
                 force_low_mode=force_low_sales,
                 product_name=prod["name"]
             )
@@ -222,6 +236,12 @@ def simulate_month(req: SimulationRequest):
         "last_invoice": current_inv,
         "total_sales_val": total_revenue
     })
+
+    # --- PERSIST ANY RATE CHANGES THAT HAPPENED DURING THIS SIMULATION ---
+    # So next month's default rate starts from wherever this month ended.
+    for pid, rate in active_rate.items():
+        if rate != all_products[pid]["rate"]:
+            storage.update_product_rate(pid, rate)
 
     final_stock_str = ", ".join(f"{all_products[pid]['name']}: {qty}" for pid, qty in current_stock.items())
 

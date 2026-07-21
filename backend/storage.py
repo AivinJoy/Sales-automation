@@ -52,9 +52,11 @@ def save_state(state):
 # --- NEW: PRODUCT MANAGEMENT ---
 
 def get_products():
-    """Fetches all products (id, name, rate) from Supabase."""
+    """Fetches all products (id, name, rate) from Supabase, ordered by id
+    so 'first product' is stable and predictable (e.g. Soore Box before
+    Soore Liquid, since Box was created first)."""
     try:
-        response = supabase.table("products").select("*").execute()
+        response = supabase.table("products").select("*").order("id").execute()
         return response.data
     except Exception as e:
         print(f"❌ DB Error fetching products: {e}")
