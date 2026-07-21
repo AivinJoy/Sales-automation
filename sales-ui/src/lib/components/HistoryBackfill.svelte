@@ -15,7 +15,8 @@
 
     interface InflowLineItem {
         product_id: number | null;
-        qty: number;
+        qty: number | null;
+        rate: number | null;   // defaults to the product's current rate, editable per line
     }
 
     interface InflowRow {
@@ -48,6 +49,11 @@
     }
     
     let products: Product[] = []
+
+    function currentRateFor(productId: number | null): number | null {
+        const p = products.find(p => p.id === productId);
+        return p ? p.rate : null;
+    }
 
     // Form State
     let simMonth: number = 6;
@@ -84,7 +90,7 @@
             openingStocks = { ...openingStocks };
 
             if (stockInflows.length === 0 && products.length > 0) {
-                stockInflows = [{ date: "", invoice_no: "INV-001", items: [{ product_id: products[0].id, qty: 0 }] }];
+                stockInflows = [{ date: "", invoice_no: "INV-001", items: [{ product_id: products[0].id, qty: null, rate: currentRateFor(products[0].id) }] }];
             }
         } catch (e) {
             console.error("Could not fetch products", e);
@@ -118,7 +124,7 @@
 
     function addInflowRow() {
         const defaultProduct = products.length > 0 ? products[0].id : null;
-        stockInflows = [...stockInflows, { date: "", invoice_no: nextInvoicePlaceholder(), items: [{ product_id: defaultProduct, qty: 0 }] }];
+        stockInflows = [...stockInflows, { date: "", invoice_no: nextInvoicePlaceholder(), items: [{ product_id: defaultProduct, qty: null, rate: currentRateFor(defaultProduct) }] }];
     }
 
     function removeInflowRow(index: number) {
@@ -127,7 +133,7 @@
 
     function addLineItem(rowIndex: number) {
         const defaultProduct = products.length > 0 ? products[0].id : null;
-        stockInflows[rowIndex].items = [...stockInflows[rowIndex].items, { product_id: defaultProduct, qty: 0 }];
+        stockInflows[rowIndex].items = [...stockInflows[rowIndex].items, { product_id: defaultProduct, qty: null, rate: currentRateFor(defaultProduct) }];
     }
 
     function removeLineItem(rowIndex: number, itemIndex: number) {
@@ -188,8 +194,8 @@
                         date: row.date,
                         invoice_no: row.invoice_no,
                         inflows: row.items
-                            .filter(item => item.product_id !== null && item.qty > 0)
-                            .map(item => ({ product_id: item.product_id, qty: item.qty }))
+                            .filter(item => item.product_id !== null && item.qty !== null && item.qty > 0)
+                            .map(item => ({ product_id: item.product_id, qty: item.qty, rate: item.rate }))
                     }))
                     .filter(entry => entry.inflows.length > 0)
             };
@@ -326,15 +332,21 @@
                 <div class="pl-2 border-l-2 border-blue-100 space-y-2">
                     {#each inflow.items as item, j}
                         <div class="grid grid-cols-12 gap-2 items-center">
-                            <div class="col-span-6">
-                                <select bind:value={item.product_id} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none bg-white text-sm">
+                            <div class="col-span-4">
+                                <select 
+                                    bind:value={item.product_id} 
+                                    on:change={() => item.rate = currentRateFor(item.product_id)}
+                                    class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none bg-white text-sm">
                                     {#each products as product}
                                         <option value={product.id}>{product.name}</option>
                                     {/each}
                                 </select>
                             </div>
-                            <div class="col-span-4">
+                            <div class="col-span-3">
                                 <input type="number" aria-label="Qty" bind:value={item.qty} class="w-full p-2 border rounded focus:ring-1 focus:ring-blue-300 outline-none font-bold text-gray-700 text-center" placeholder="Qty">
+                            </div>
+                            <div class="col-span-3">
+                                <input type="number" aria-label="Rate" bind:value={item.rate} class="w-full p-2 border rounded focus:ring-1 focus:ring-yellow-400 outline-none font-bold text-yellow-700 bg-yellow-50 text-center" placeholder="Rate ₹" title="Rate for this purchase — change only if this bill's price differs from the product's current rate">
                             </div>
                             <div class="col-span-2 text-center">
                                 <button on:click={() => removeLineItem(i, j)} class="text-red-400 hover:text-red-600 font-bold px-2 cursor-pointer" title="Remove Product Line" aria-label="Remove Product Line">✕</button>

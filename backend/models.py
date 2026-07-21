@@ -6,6 +6,7 @@ from typing import List
 class ProductInflow(BaseModel):
     product_id: int
     qty: int
+    rate: float | None = None
 
 class StockEntry(BaseModel):
     date: str
